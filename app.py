@@ -1,10 +1,11 @@
 
 import streamlit as st
 import plotly.graph_objects as go
+import pandas as pd
 
 from controller import run_forecast
-
-
+from smart_meter_service import load_smart_meter_data
+from smart_meter_model import train_smart_meter_model
 st.set_page_config(
     page_title="AI Grid Load & DR Platform",
     layout="wide",
@@ -363,6 +364,111 @@ def main():
         "Demo note: Forecasts use synthetic data. "
         "Savings are illustrative estimates, not guaranteed savings."
     )
+
+    # ---------------- SMART METER DASHBOARD ----------------
+    st.markdown("---")
+    st.header("⚡ Smart Meter Monitoring")
+    st.write(
+        "Upload smart-meter data to analyse hourly energy consumption "
+        "and electrical measurements."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload Smart Meter Data (CSV)",
+        type=["csv", "xls"],
+        key="smart_meter_upload",
+    )
+
+    if uploaded_file is not None:
+        try:
+            with st.spinner("Processing smart-meter readings..."):
+                meter_data = load_smart_meter_data(uploaded_file)
+
+            if meter_data.empty:
+                st.warning("No valid meter readings found.")
+            else:
+                meter_options = sorted(
+                    meter_data["meter"].dropna().unique().tolist()
+                )
+
+                if not meter_options:
+                    st.warning("No meter IDs were found in the uploaded data.")
+                else:
+                    selected_meter = st.selectbox(
+                        "Select Meter",
+                        meter_options,
+                        key="selected_meter",
+                    )
+
+                    selected_data = (
+                        meter_data[meter_data["meter"] == selected_meter]
+                        .sort_values("hour")
+                        .copy()
+                    )
+
+                    total_energy = selected_data["energy_kwh"].sum()
+                    avg_voltage = selected_data["avg_voltage"].mean()
+                    avg_current = selected_data["avg_current"].mean()
+                    avg_frequency = selected_data["avg_frequency"].mean()
+
+                    st.subheader("Smart Meter Summary")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Total Recorded Energy", f"{total_energy:,.2f} kWh")
+                    m2.metric(
+                        "Average Voltage",
+                        f"{avg_voltage:.2f} V" if pd.notna(avg_voltage) else "N/A",
+                    )
+                    m3.metric(
+                        "Average Current",
+                        f"{avg_current:.2f} A" if pd.notna(avg_current) else "N/A",
+                    )
+                    m4.metric(
+                        "Average Frequency",
+                        f"{avg_frequency:.2f} Hz"
+                        if pd.notna(avg_frequency) else "N/A",
+                    )
+
+                    st.subheader("Hourly Energy Consumption")
+                    st.line_chart(
+                        selected_data.set_index("hour")["energy_kwh"]
+                    )
+
+                    st.subheader("Meter Readings")
+                    st.dataframe(selected_data, use_container_width=True)
+
+                    st.markdown("---")
+                    st.subheader("🤖 Smart Meter AI Forecast")
+
+                    if st.button("Train and Evaluate AI Model"):
+                        try:
+                            with st.spinner("Training model..."):
+                                model, results, mae = train_smart_meter_model(
+                                    selected_data
+                                )
+
+                            st.metric("Mean Absolute Error (MAE)", f"{mae:.3f} kWh")
+                            st.caption(
+                                "This MAE is calculated on a held-out historical "
+                                "test period. Lower is generally better."
+                            )
+
+                            st.subheader("Actual vs Predicted Consumption")
+                            chart_data = results.set_index("hour")[
+                                ["energy_kwh", "predicted_kwh"]
+                            ].rename(
+                                columns={
+                                    "energy_kwh": "Actual Energy (kWh)",
+                                    "predicted_kwh": "Predicted Energy (kWh)",
+                                }
+                            )
+                            st.line_chart(chart_data)
+                            st.dataframe(results, use_container_width=True)
+
+                        except (ValueError, KeyError, TypeError) as error:
+                            st.error(f"AI model could not be trained: {error}")
+
+        except (ValueError, KeyError, TypeError, OSError) as error:
+            st.error(f"Could not process meter data: {error}")
 
 
 if __name__ == "__main__":
